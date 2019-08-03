@@ -1,0 +1,37 @@
+###################################################
+#Author: Almir Candido                            #
+#Contact: https://br.linkedin.com/in/almircandido #
+#                                                 #
+#Ansible Version: 2.8                             #
+#                                                 #
+#Requisitos:                                      #
+#Install:                                         #
+#python-boto                                      #
+#python-boto3                                     #
+###################################################
+# Module ec2_metric_alarm for CloudWatch
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY_ID: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_ACCESS_KEY: xxxxxxxxxxxxxxxxx #inform secret key
+    AWS_REGION: us-east-1  #inform region example N. Virginia
+  tasks:
+    - name: create alarm
+      ec2_metric_alarm:
+        aws_access_key: "{{ AWS_ACCESS_KEY_ID }}"
+        aws_secret_key: "{{ AWS_SECRET_ACCESS_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        state: present 
+        name: "cpu-high"
+        metric: "CPUUtilization"
+        namespace: "AWS/EC2"
+        statistic: Average
+        comparison: ">="
+        threshold: 90.0
+        period: 300
+        evaluation_periods: 3
+        unit: "Percent"
+        dimensions: {'InstanceId':'i-00dcee5423b309fd9'} #inform your ec2 instance ID
+        alarm_actions: ["arn:aws:sns:us-east-1:929203628275:Default_CloudWatch_Alarms_Topic"] #this line sends email to default account, you need to change this line to the one provided to your account
+...
