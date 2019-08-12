@@ -1,0 +1,183 @@
+#####################################################
+###Author: Almir Candido                            #
+###Contact: https://br.linkedin.com/in/almircandido #
+###                                                 #
+###Ansible Version: 2.8                             #
+###                                                 #
+###Requisitos:                                      #
+###Install:                                         #
+###python-boto                                      #
+###python-boto3                                     #
+#####################################################
+# Create Load Balancer and EC2 Instance.
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: inform your access key
+    AWS_SECRET_KEY: inform your secret key
+    AWS_REGION: us-east-1 # N. Virginia
+    AWS_ZONE: us-east-1a
+    LB_NAME: LB
+    INSTANCE_TYPE: t2.micro
+    INSTANCE_TAG: web_server
+    INSTANCE_PORT: 80
+    DEFAULT_VPC_SUBNET: subnet-b5cd84d2
+    LB_PORT: 80
+    LB_SSL_PORT: 443
+    LB_PROTO: http
+    LB_SSL_PROTO: https
+    SG_NAME: elb_sg
+    VPC_ID: vpc-89abcef3
+    BASE_AMI: ami-0c322300a1dd5dc79 #RHEL 8
+    KEY_NAME: ansible_access_keypair
+    PATH: /home/ansible/
+   
+  tasks:
+    - name: Create Key Pair
+      ec2_key:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        name: "{{ KEY_NAME }}"
+      register: keypair
+    - name: Save Key Pair
+      lineinfile:
+        create: yes
+        path: "{{ PATH }}{{ KEY_NAME }}.pem"
+        line: "{{ keypair.key.private_key }}"
+        mode: 0600
+    
+    - name: Create ELB Security Group
+      ec2_group:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        name: "{{ SG_NAME }}"
+        description: ELB_ACCESS
+        vpc_id: "{{ VPC_ID }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+              - 22
+            cidr_ip: 0.0.0.0/0
+      
+    - name: Create Load Balancer
+      local_action:
+        module: ec2_elb_lb
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        name: "{{ LB_NAME }}"
+        state: present
+        region: "{{ AWS_REGION }}"
+        zones: "{{ AWS_ZONE }}"
+        wait: true
+        security_group_names: "{{ SG_NAME }}"
+        listeners:
+          - protocol: "{{ LB_PROTO }}"
+            load_balancer_port: "{{ LB_PORT }}"
+            instance_port: "{{ INSTANCE_PORT }}"
+#If you have SSL certificate stored in aws.
+#          - protocol: "{{ LB_SSL_PROTO }}"
+#            load_balancer_port: "{{ LB_SSL_PORT }}"
+#            instance_port: "{{ LB_PORT }}"
+#            ssl_certificate_id: "arn:aws:iam::xxxxxx:server-certificate/domain_cert"
+        health_check:
+          ping_protocol: "{{ LB_PROTO }}" # options are http, https, ssl, tcp
+          ping_port: "{{ INSTANCE_PORT }}"
+          ping_path: "/healthy_check.txt"
+          response_timeout: 5 #seconds
+          interval: 30 #seconds
+          unhealthy_threshold: 2
+          healthy_threshold: 10
+
+    - name: Create EC2 instance
+      ec2:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        zone: "{{ AWS_ZONE }}"
+        instance_type: "{{ INSTANCE_TYPE }}"
+        keypair: "{{ KEY_NAME }}"
+        group: "{{ SG_NAME }}"
+        image: "{{ BASE_AMI }}"
+        vpc_subnet_id: '{{ DEFAULT_VPC_SUBNET }}'
+        assign_public_ip: yes
+        wait: true
+        count: 2 #number of instances
+        instance_tags:
+          Name: "{{ INSTANCE_TAG }}"
+      register: ec2
+
+    - name: Add host inventory
+      add_host:
+        hostname: "{{ item.public_ip }}"
+        groupname: web
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        ansible_ssh_private_key_file: "{{ PATH }}{{ KEY_NAME }}.pem"
+      loop: "{{ ec2.instances }}"
+
+    - name: Wait for ssh to come up
+      wait_for:
+        host: "{{ item.public_ip }}"
+        port: 22
+        delay: 6
+        timeout: 90
+      loop: "{{ ec2.instances }}"
+
+### Install HTTPD ###
+- hosts: web
+  become: yes
+  gather_facts: no
+  remote_user: ec2-user
+  vars:
+    PACKAGES:
+      - httpd
+      - mod_ssl
+  tasks:
+    - name: install {{ PACKAGES }}
+      yum:
+        name: "{{ PACKAGES }}"
+        state: latest
+    - name: Create file for healthy check load balancer
+      file:
+        path: /var/www/html/healthy_check.txt
+        state: touch
+    - name: Start httpd service
+      service:
+        name: httpd
+        state: started
+        enabled: true
+
+### Add each EC2 instance to the ELB ###
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: inform your access key
+    AWS_SECRET_KEY: inform your secret key
+    AWS_REGION: us-east-1
+    LB_NAME: LB
+    INSTANCE_TAG: web_server
+  tasks:
+    - name: get all ec2 instances
+      ec2_instance_facts:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        filters:
+          tag:Name: "{{ INSTANCE_TAG }}"
+      register: ec2
+    - name: add ec2 instance on load balancer
+      local_action:
+        module: ec2_elb
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        instance_id: "{{ item.instance_id }}"
+        ec2_elbs: "{{ LB_NAME }}"
+        state: present
+      loop: "{{ ec2.instances }}"
+      ignore_errors: yes
+...
