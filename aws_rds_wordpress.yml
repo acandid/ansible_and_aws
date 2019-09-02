@@ -1,0 +1,211 @@
+####################################################
+###Author: Almir Candido                            #
+###Contact: https://br.linkedin.com/in/almircandido #
+###                                                 #
+###Ansible Version: 2.8                             #
+###                                                 #
+###Requisitos:                                      #
+###Install:                                         #
+###python-boto                                      #
+###python-boto3                                     #
+#####################################################
+## This Playbook create keypair, security group, RDS Database, ec2 instance, install httpd, Download and configure Wordpress and start httpd server
+#
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: Inform your access key
+    AWS_SECRET_KEY: Inform your secret key
+    AWS_REGION: us-east-1
+    BASE_AMI: ami-0c322300a1dd5dc79 #RHEL 8
+    INSTANCE_TAG: web_wordpress
+    INSTANCE_TYPE: t2.micro
+    DEFAULT_VPC_SUBNET: subnet-b5cd84d2
+    AWS_ZONE: us-east-1a 
+    SG_NAME: web_wordpress
+    VPC_ID: vpc-89abcef3
+    KEY_NAME: wordpress_web
+    PATH: /home/ansible/
+    DB_ENGINE: mariadb
+    DB_SIZE: '10'
+    BKP_RETENTION: '7'
+    INSTANCE_DB_NAME: ansible
+    DB_USER: almir
+    PASS_DB_USER: password
+    INSTANCE_DB_TYPE: db.t2.micro
+    DB_TAGS: db_wordpress
+  tasks:
+    - name: Create DataBase
+      rds:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        command: create
+        instance_name: "{{ INSTANCE_DB_NAME }}"
+        db_engine: "{{ DB_ENGINE }}"
+        db_name: "{{ INSTANCE_DB_NAME }}"
+        size: "{{ DB_SIZE }}"
+        instance_type: "{{ INSTANCE_DB_TYPE }}"
+        username: "{{ DB_USER }}"
+        password: "{{ PASS_DB_USER }}"
+        backup_retention: "{{ BKP_RETENTION }}"
+        tags:
+          Environment: "{{ DB_TAGS }}"
+
+    - name: Create Key pair.
+      ec2_key:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        name: "{{ KEY_NAME }}"
+      register: keypair
+    - name: Save Key Pair
+      lineinfile:
+        create: yes
+        path: "{{ PATH }}{{ KEY_NAME }}.pem"
+        line: "{{ keypair.key.private_key }}"
+        mode: 0600
+
+    - name: Create group http
+      ec2_group:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        name: "{{ SG_NAME }}"
+        description: WEB_ACCESS
+        vpc_id: "{{ VPC_ID }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 80
+              - 443
+              - 22
+            cidr_ip: 0.0.0.0/0
+
+    - name: Create EC2 instance
+      ec2:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        zone: "{{ AWS_ZONE }}" 
+        keypair: "{{ KEY_NAME }}"
+        instance_type: "{{ INSTANCE_TYPE }}"
+        group: ['default', '{{ SG_NAME }}']
+        image: "{{ BASE_AMI }}"
+        wait: true
+        assign_public_ip: yes
+        vpc_subnet_id: "{{ DEFAULT_VPC_SUBNET }}"
+        instance_tags:
+          Name: "{{ INSTANCE_TAG }}"
+      register: ec2
+
+    - name: Add host inventory
+      add_host:
+        hostname: "{{ item.public_ip }}"
+        groupname: web
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        ansible_ssh_private_key_file: "{{ PATH }}{{ KEY_NAME }}.pem"
+      loop: "{{ ec2.instances }}"
+
+    - name: Wait for ssh to come up
+      wait_for:
+        host: "{{ item.public_ip }}"
+        port: 22
+        delay: 6
+        timeout: 90
+      loop: "{{ ec2.instances }}"
+
+    - name: Wait for RDS Available status for continue
+      rds:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        command: facts
+        instance_name: "{{ INSTANCE_DB_NAME }}"
+        region: "{{ AWS_REGION }}"
+      register: database
+      until: database.instance.status == "available"
+      retries: 40
+      delay: 30
+    - name: RDS status
+      debug:
+        var: database.instance.status
+
+### Install httpd and Wordpress ###
+- hosts: web
+  become: yes
+  gather_facts: no
+  remote_user: ec2-user
+  vars:
+    PASS_DB_USER: password #must be the same as previously reported
+    WORDPRESS_URL: https://br.wordpress.org/latest-pt_BR.tar.gz #link wordpress from Brazil
+    PACKAGES:
+      - httpd
+      - mod_ssl
+      - php
+      - php-mysqlnd
+      - unzip
+  tasks:
+    - name: Install {{ PACKAGES }}
+      yum:
+        name: "{{ PACKAGES }}"
+        state: latest
+    - name: Configure SELinux file permissive mode
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: SELINUX=permissive
+    - name: Set SELinux permissive mode
+      command: setenforce 0
+    - name: WordPress Download
+      get_url:
+        url: "{{ WORDPRESS_URL }}"
+        dest: /home/ec2-user/
+      register: wordpress_file
+    - name: Unarchive wordpress files
+      unarchive:
+        src: "{{ wordpress_file.dest }}"
+        dest: /var/www/html/
+        remote_src: yes
+        mode: 0775
+        owner: apache
+        group: apache
+    
+    - name: Create file wp-config.php
+      copy:
+        src: /var/www/html/wordpress/wp-config-sample.php
+        dest: /var/www/html/wordpress/wp-config.php
+        remote_src: true
+        owner: apache
+        group: apache
+        mode: 0660
+    - name: WordPress configure database name
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: '^(.*)nome_do_banco_de_dados_aqui(.*)$'
+        line: "define('DB_NAME', '{{ hostvars.localhost.database.instance.db_name }}');"
+    - name: WordPress Configure user database
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: '^(.*)nome_de_usuario_aqui(.*)$'
+        line: "define('DB_USER', '{{ hostvars.localhost.database.instance.username }}');"
+    - name: WordPress Configure user database password
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: '^(.*)senha_aqui(.*)$' 
+        line: "define('DB_PASSWORD', '{{ PASS_DB_USER }}');"
+    - name: WordPress configure database host
+      lineinfile:
+        path: /var/www/html/wordpress/wp-config.php
+        regexp: '^(.*)localhost(.*)$'
+        line: "define('DB_HOST', '{{ hostvars.localhost.database.instance.endpoint }}');"
+    
+    - name: Start httpd service
+      service:
+        name: httpd
+        state: started
+        enabled: true
+    - name: Access link to complete installation
+      debug:
+        msg: '{{ hostvars.localhost.ec2.instances[0].public_dns_name }}/wordpress/wp-admin/install.php'
+... 
