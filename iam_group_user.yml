@@ -1,0 +1,49 @@
+###################################################
+#Author: Almir Candido                            #
+#Contact: https://br.linkedin.com/in/almircandido #
+#                                                 #
+#Ansible Version: 2.9                             #
+#                                                 #
+#Requisitos:                                      #
+#Install:                                         #
+#python-boto                                      #
+#python-boto3                                     #
+###################################################
+# Create user and group in AWS.
+
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_KEY: xxxxxxxxxxxxxxxxx #inform secret key
+    IAM_USER: xxxxxxxxxx #inform user name
+    IAM_USER_PASS: xxxxxxxxxxxxx #inform user password
+    IAM_GROUP: xxxxxxxxxx #inform group name
+    # Policy example
+    POLICY:
+      - "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+      - "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
+  tasks:
+    - name: Create new user
+      iam:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        iam_type: user
+        name: "{{ IAM_USER }}"
+        password: "{{ IAM_USER_PASS }}"
+        update_password: always
+        state: present
+#
+    - name: Create group and add user
+      iam_group:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        name: "{{ IAM_GROUP }}"
+        users: "{{ IAM_USER }}"
+        state: present
+        managed_policy: "{{ item }}"
+      loop:
+        - "{{ POLICY }}"
+...
+
