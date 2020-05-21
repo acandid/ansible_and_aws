@@ -1,0 +1,56 @@
+###################################################
+#Author: Almir Candido                            #
+#Contact: https://br.linkedin.com/in/almircandido #
+#                                                 #
+#Ansible Version: 2.9                             #
+#                                                 #
+#Requisitos:                                      #
+#Install:                                         #
+#python-boto                                      #
+#python-boto3                                     #
+#pip install boto3                                #
+###################################################
+#Documentation about modules
+#https://docs.ansible.com/ansible/latest/modules/route53_module.html
+#https://docs.ansible.com/ansible/latest/modules/route53_zone_module.html
+#AWS create zone and records
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_KEY: xxxxxxxxxxxxxxxxxxxx #inform secret key
+    DOMAIN: almircandido.com
+    RECORD_TYPE: A
+    RECORD_VALUE: 200.200.200.23
+    TTL: 300
+    RECORD:
+      - www
+      - ftp
+    primary_domain: []
+  tasks:
+    - name: Create DNS Zone in AWS
+      route53_zone:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        zone: "{{ DOMAIN }}"
+        comment: my domain
+#   
+    - name: Create Records
+      route53:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        zone: "{{ DOMAIN }}"
+        record: "{{ item }}.{{ DOMAIN }}"
+        type: "{{ RECORD_TYPE }}"
+        value: "{{ RECORD_VALUE }}"
+        ttl: "{{ TTL }}"
+        state: present
+        wait: yes
+      loop: "{{ RECORD }}"
+      register: result
+#
+    - name: Zone and records were created
+      debug:
+        var: result
+...
