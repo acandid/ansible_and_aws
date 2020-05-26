@@ -1,0 +1,49 @@
+###################################################
+#Author: Almir Candido                            #
+#Contact: https://br.linkedin.com/in/almircandido #
+#                                                 #
+#Ansible Version: 2.9                             #
+#                                                 #
+#Requisitos:                                      #
+#Install:                                         #
+#python-boto                                      #
+#python-boto3                                     #
+#pip install boto3                                #
+###################################################
+#Documentation about modules
+#https://docs.ansible.com/ansible/latest/modules/ec2_instance_info_module.html
+#https://docs.ansible.com/ansible/latest/modules/ec2_vol_module.html
+#AWS create new volume and attach
+#
+---
+- hosts: localhost
+  gather_facts: no
+  vars:
+    AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_KEY: xxxxxxxxxxxxxxxxxxxx #inform secret key
+    AWS_REGION: us-east-1 # N. Virginia
+    TAGS: Name
+    TAG_NAME: webserver01
+    VOLUME_SIZE: '10'
+    DEVICE_NAME: /dev/xvdf
+  tasks:
+    - name: Instance facts
+      ec2_instance_info:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        filters:
+          "tag:Name": "{{ TAG_NAME }}"
+      register: result
+#
+    - name: Add new volume to instance
+      ec2_vol:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        instance: "{{ item.instance_id }}"
+        device_name: "{{ DEVICE_NAME }}"
+        delete_on_termination: yes
+        volume_size: "{{ VOLUME_SIZE }}"
+      loop: "{{ result.instances }}"
+...
