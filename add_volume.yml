@@ -22,7 +22,6 @@
     AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
     AWS_SECRET_KEY: xxxxxxxxxxxxxxxxxxxx #inform secret key
     AWS_REGION: us-east-1 # N. Virginia
-    TAGS: Name
     TAG_NAME: webserver01
     VOLUME_SIZE: '10'
     DEVICE_NAME: /dev/xvdf
