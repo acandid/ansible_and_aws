@@ -1,0 +1,198 @@
+###################################################
+#Author: Almir Candido                            #
+#Contact: https://br.linkedin.com/in/almircandido #
+#                                                 #
+#Ansible Version: 2.9                             #
+#                                                 #
+#Requirements:                                    #
+#Install:                                         #
+#python-boto                                      #
+#python-boto3                                     #
+#pip install boto3                                #
+###################################################
+#Documentation about modules
+#https://docs.ansible.com/ansible/latest/modules/ec2_vol_module.html
+#https://docs.ansible.com/ansible/latest/modules/ec2_module.html
+#https://docs.ansible.com/ansible/latest/modules/add_host_module.html
+#https://docs.ansible.com/ansible/latest/modules/wait_for_module.html
+#https://docs.ansible.com/ansible/latest/modules/filesystem_module.html
+#https://docs.ansible.com/ansible/latest/modules/yum_module.html
+#https://docs.ansible.com/ansible/latest/modules/service_module.html
+#https://docs.ansible.com/ansible/latest/modules/file_module.html
+#https://docs.ansible.com/ansible/latest/modules/mount_module.html
+#https://docs.ansible.com/ansible/latest/modules/copy_module.html
+#https://docs.ansible.com/ansible/latest/modules/replace_module.html
+#https://docs.ansible.com/ansible/latest/modules/mysql_user_module.html
+#
+#AWS Create ec2 instance and install MySQL Server 8
+
+---
+- hosts: localhost
+  gather_facts: false
+  vars:
+    AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_KEY: xxxxxxxxxxxxxxxxxxxx #inform secret key
+    AWS_REGION: us-east-1  #N. Virginia
+    AWS_ZONE: us-east-1a
+    AWS_IMAGE: ami-0c322300a1dd5dc79 #RHEL 8
+    INSTANCE_TAG: database01
+    DEVICE_NAME: /dev/xvdf
+    KEY_NAME: almir_ssh
+    SECURITY_GROUP: almir_ssh
+    VOL_SIZE: '10'
+    VOL_NAME: db_volume
+    INSTANCE_TYPE: t2.micro
+    PATH: /home/ansible/
+  tasks:
+    - name: Create new EBS volume
+      ec2_vol:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        zone: "{{ AWS_ZONE }}"
+        volume_size: "{{ VOL_SIZE }}"
+        name: "{{ VOL_NAME }}"
+        device_name: "{{ DEVICE_NAME }}"
+      register: new_vol
+#
+    - name: Create new EC2 instance
+      ec2:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        zone: "{{ AWS_ZONE }}"
+        instance_type: "{{ INSTANCE_TYPE }}"
+        keypair: "{{ KEY_NAME }}"
+        group: "{{ SECURITY_GROUP }}"
+        image: "{{ AWS_IMAGE }}"
+        wait: true
+        count: 1
+        instance_tags:
+          Name: "{{ INSTANCE_TAG }}"
+      register: ec2
+#
+    - name: Attach Volume
+      ec2_vol:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        ec2_region: "{{ AWS_REGION }}"
+        instance: "{{ ec2.instances[0].id }}"
+        id: "{{ new_vol.volume_id }}"
+        device_name: "{{ DEVICE_NAME }}"
+        delete_on_termination: yes
+#
+    - name: Add host inventory
+      add_host:
+        hostname: "{{ item.public_ip }}"
+        groupname: database
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        ansible_ssh_private_key_file: "{{ PATH }}{{ KEY_NAME }}.pem"
+      loop: "{{ ec2.instances }}"
+#
+    - name: Wait for ssh to come up
+      wait_for:
+        host: "{{ item.public_ip }}"
+        port: 22
+        delay: 6
+        timeout: 90
+      loop: "{{ ec2.instances }}"
+#
+### Configure Instance ###
+- hosts: database
+  become: yes
+  gather_facts: false
+  remote_user: ec2-user
+  vars:
+    DEVICE_NAME: /dev/xvdf
+    MYSQL_NEW_DIR: /data
+    MYSQL_OLD_DIR: /var/lib/mysql
+    PACKAGES:
+      - mysql-server
+      - python3-PyMySQL.noarch
+    ROOT_USER: root
+    ROOT_PASSWORD: 1234fsgdFhaj@1
+  tasks:
+    - name: Format new partition
+      filesystem:
+        fstype: xfs
+        dev: "{{ DEVICE_NAME }}"
+#
+    - name: Install {{ PACKAGES }}
+      yum:
+        name: "{{ PACKAGES }}"
+        state: latest
+#
+    - name: Start and enable MySQL service
+      service:
+        name: mysqld
+        state: started
+        enabled: true
+#
+    - name: Stop the mysql service to copy files created during start
+      service:
+        name: mysqld
+        state: stopped
+# 
+    - name: Mysql new directory
+      file:
+        path: "{{ MYSQL_NEW_DIR }}"
+        state: directory
+        owner: mysql
+        group: mysql
+        mode: 0755
+        setype: mysqld_db_t
+#
+    - name: Mount new datadir
+      mount:
+        src: "{{ DEVICE_NAME }}"
+        path: "{{ MYSQL_NEW_DIR }}"
+        fstype: xfs
+        state: mounted 
+#
+    - name: Copy mysql to new directory
+      copy:
+        src: "{{ MYSQL_OLD_DIR }}"
+        dest: "{{ MYSQL_NEW_DIR }}"
+        remote_src: yes
+        owner: mysql
+        group: mysql
+        directory_mode: yes
+        setype: mysqld_db_t
+#
+    - name: Change datadir
+      replace:
+        path: /etc/my.cnf.d/mysql-server.cnf
+        regexp: '^datadir=/var/lib/mysql'
+        replace: 'datadir=/data/mysql'
+#
+    - name: Change socket
+      replace:
+        path: /etc/my.cnf.d/mysql-server.cnf
+        regexp: '^socket=/var/lib/mysql/mysql.sock'
+        replace: 'socket=/data/mysql/mysql.sock'
+      notify: 
+        - restart mysql
+#
+    - name: Start mysql service
+      service:
+        name: mysqld
+        state: started
+#
+# To access MySQL locally use the command mysql -h 127.0.0.1 -u root -p'root_password'
+    - name: Set root password localhost
+      mysql_user:
+        name: "{{ ROOT_USER }}"
+        host: localhost
+        password: "{{ ROOT_PASSWORD }}"
+        state: present
+        check_implicit_admin: yes
+        login_user: "{{ ROOT_USER }}"
+        login_host: localhost
+        login_password: "{{ ROOT_PASSWORD }}"
+#
+  handlers:
+    - name: restart mysql
+      service:
+        name: mysqld
+        state: restarted
+...      
