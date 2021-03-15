@@ -1,0 +1,67 @@
+---
+####################################################
+##Author: Almir Candido                            #
+##Contact: https://br.linkedin.com/in/almircandido #
+##                                                 #
+##Ansible Version: 2.9                             #
+##                                                 #
+##Requirements:                                    #
+##Install:                                         #
+##python-boto                                      #
+##python-boto3                                     #
+##pip install boto3                                #
+####################################################
+#Documentation about modules
+#https://docs.ansible.com/ansible/2.9/modules/rds_module.html
+#https://docs.ansible.com/ansible/2.9/modules/debug_module.html
+
+- name: Create PostgreSQL instance on AWS
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    AWS_ACCESS_KEY: xxxxxxxxxxxxxxxxxxxx #inform access key
+    AWS_SECRET_KEY: xxxxxxxxxxxxxxxxxxxx #inform secret key
+    AWS_REGION: us-east-1
+    DB_ENGINE: postgres
+    DB_SIZE: '20'
+    BKP_RETENTION: '7'
+    INSTANCE_DB_NAME: ansible2
+    DB_USER: postgres
+    PASS_DB_USER: WSXEDC092122qwe
+    INSTANCE_DB_TYPE: db.t2.micro
+    DB_TAGS: dev
+  tasks:
+    - name: Create DataBase
+      rds:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        command: create
+        instance_name: "{{ INSTANCE_DB_NAME }}"
+        db_engine: "{{ DB_ENGINE }}"
+        db_name: "{{ INSTANCE_DB_NAME }}"
+        size: "{{ DB_SIZE }}"
+        instance_type: "{{ INSTANCE_DB_TYPE }}"
+        username: "{{ DB_USER }}"
+        password: "{{ PASS_DB_USER }}"
+        backup_retention: "{{ BKP_RETENTION }}"
+        tags:
+          Environment: "{{ DB_TAGS }}"
+
+    - name: Wait for PostgreSQL available status
+      rds:
+        aws_access_key: "{{ AWS_ACCESS_KEY }}"
+        aws_secret_key: "{{ AWS_SECRET_KEY }}"
+        region: "{{ AWS_REGION }}"
+        command: facts
+        instance_name: "{{ INSTANCE_DB_NAME }}"
+      register: result
+      until: result.instance.status == "available"
+      retries: 40
+      delay: 30
+
+    - name: PostgreSQL status
+      debug:
+        var: result
+...
